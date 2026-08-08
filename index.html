@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>2-Player Carrom Board</title>
+    <title>Pro Carrom Board Game</title>
     <style>
         * {
             box-sizing: border-box;
@@ -13,74 +13,78 @@
         body {
             margin: 0;
             padding: 10px;
-            background: #1e272e;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #141a21;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            color: #fff;
+            color: #ecf0f1;
             overflow: hidden;
         }
 
-        /* Scoreboard Styling */
+        /* Scoreboard Header */
         #scoreboard {
             display: flex;
             justify-content: space-between;
             align-items: center;
             width: 100%;
-            max-width: 500px;
-            background: #2c3e50;
-            padding: 12px 20px;
-            border-radius: 12px;
-            margin-bottom: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            max-width: 580px;
+            background: #1f2937;
+            padding: 10px 18px;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            border: 1px solid #374151;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
         }
 
-        .player-box {
+        .player-card {
             text-align: center;
-            padding: 6px 12px;
-            border-radius: 8px;
+            padding: 6px 14px;
+            border-radius: 6px;
             transition: all 0.3s ease;
-            min-width: 110px;
+            min-width: 120px;
+            background: #111827;
+            border: 2px solid transparent;
         }
 
-        .player-box.active {
-            background: #27ae60;
-            box-shadow: 0 0 10px #2ecc71;
-            transform: scale(1.05);
+        .player-card.active {
+            border-color: #22c55e;
+            background: #064e3b;
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.4);
         }
 
-        .player-name {
-            font-size: 0.85rem;
+        .player-title {
+            font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 1px;
-            opacity: 0.8;
+            color: #9ca3af;
         }
 
         .player-score {
-            font-size: 1.6rem;
+            font-size: 1.5rem;
             font-weight: bold;
+            color: #f9fafb;
         }
 
-        #status-msg {
-            font-size: 0.9rem;
-            font-weight: bold;
-            color: #f1c40f;
+        #status-box {
             text-align: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #fbbf24;
+            max-width: 200px;
         }
 
         /* Canvas Wrapper */
         #game-container {
             position: relative;
             width: 100%;
-            max-width: 500px;
+            max-width: 580px;
             aspect-ratio: 1 / 1;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
-            border-radius: 12px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.8);
+            border-radius: 8px;
             overflow: hidden;
-            background: #5c3a21;
         }
 
         canvas {
@@ -90,10 +94,10 @@
             touch-action: none;
         }
 
-        .controls-hint {
+        .instructions {
             margin-top: 8px;
             font-size: 0.8rem;
-            color: #bdc3c7;
+            color: #9ca3af;
             text-align: center;
         }
     </style>
@@ -102,9 +106,526 @@
 
     <!-- Scoreboard UI -->
     <div id="scoreboard">
-        <div id="p1-box" class="player-box active">
-            <div class="player-name">Player 1 (Bottom)</div>
+        <div id="p1-card" class="player-card active">
+            <div class="player-title">Player 1 (Bottom)</div>
             <div id="p1-score" class="player-score">0</div>
+        </div>
+        <div id="status-box">Player 1's Turn</div>
+        <div id="p2-card" class="player-card">
+            <div class="player-title">Player 2 (Top)</div>
+            <div id="p2-score" class="player-score">0</div>
+        </div>
+    </div>
+
+    <!-- Game Board -->
+    <div id="game-container">
+        <canvas id="carromCanvas" width="600" height="600"></canvas>
+    </div>
+
+    <div class="instructions">
+        <strong>Drag horizontally</strong> to position striker | <strong>Pull back & release</strong> to shoot
+    </div>
+
+    <script>
+        const canvas = document.getElementById('carromCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Dimensions
+        const BOARD_SIZE = 600;
+        const BORDER = 42;
+        const PLAY_MIN = BORDER;
+        const PLAY_MAX = BOARD_SIZE - BORDER;
+        const POCKET_RADIUS = 22;
+
+        // Turn & Game State
+        let currentPlayer = 1;
+        let scores = { 1: 0, 2: 0 };
+        let isMoving = false;
+        
+        // Queen Cover Logic
+        let queenPocketedBy = null; // Who pocketed the queen
+        let queenAwaitingCover = false;
+        let pointsThisTurn = 0;
+        let pocketedPiecesThisTurn = [];
+        let strikerFoul = false;
+
+        // Pockets Coordinates
+        const pockets = [
+            { x: BORDER + 12, y: BORDER + 12 },
+            { x: BOARD_SIZE - BORDER - 12, y: BORDER + 12 },
+            { x: BORDER + 12, y: BOARD_SIZE - BORDER - 12 },
+            { x: BOARD_SIZE - BORDER - 12, y: BOARD_SIZE - BORDER - 12 }
+        ];
+
+        // Piece Class
+        class Piece {
+            constructor(x, y, radius, type) {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.radius = radius;
+                this.type = type; // 'striker', 'queen', 'white', 'black'
+                this.isPocketed = false;
+                this.mass = radius * radius;
+
+                // Configure Points
+                if (type === 'white') this.points = 10;
+                else if (type === 'black') this.points = 5;
+                else if (type === 'queen') this.points = 25;
+                else this.points = 0;
+            }
+
+            draw() {
+                if (this.isPocketed) return;
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+
+                // Realistic Shading & Colors
+                let grad = ctx.createRadialGradient(
+                    this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.1,
+                    this.x, this.y, this.radius
+                );
+
+                if (this.type === 'white') {
+                    grad.addColorStop(0, '#ffffff');
+                    grad.addColorStop(1, '#d1ccc0');
+                } else if (this.type === 'black') {
+                    grad.addColorStop(0, '#4b4b4b');
+                    grad.addColorStop(1, '#1e272e');
+                } else if (this.type === 'queen') {
+                    grad.addColorStop(0, '#ff6b6b');
+                    grad.addColorStop(1, '#b71540');
+                } else if (this.type === 'striker') {
+                    grad.addColorStop(0, '#00d2d3');
+                    grad.addColorStop(1, '#01a3a4');
+                }
+
+                ctx.fillStyle = grad;
+                ctx.fill();
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = '#000000';
+                ctx.stroke();
+
+                // Inner Detail Pattern
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.45, 0, Math.PI * 2);
+                ctx.strokeStyle = this.type === 'black' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.25)';
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            stepPhysics(friction) {
+                if (this.isPocketed) return;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Friction / Resistance
+                this.vx *= friction;
+                this.vy *= friction;
+
+                if (Math.abs(this.vx) < 0.015) this.vx = 0;
+                if (Math.abs(this.vy) < 0.015) this.vy = 0;
+
+                // Wall Collisions
+                if (this.x - this.radius < PLAY_MIN) {
+                    this.x = PLAY_MIN + this.radius;
+                    this.vx *= -0.85;
+                }
+                if (this.x + this.radius > PLAY_MAX) {
+                    this.x = PLAY_MAX - this.radius;
+                    this.vx *= -0.85;
+                }
+                if (this.y - this.radius < PLAY_MIN) {
+                    this.y = PLAY_MIN + this.radius;
+                    this.vy *= -0.85;
+                }
+                if (this.y + this.radius > PLAY_MAX) {
+                    this.y = PLAY_MAX - this.radius;
+                    this.vy *= -0.85;
+                }
+
+                // Pocket Collisions
+                pockets.forEach(p => {
+                    let dist = Math.hypot(this.x - p.x, this.y - p.y);
+                    if (dist < POCKET_RADIUS) {
+                        this.isPocketed = true;
+                        this.vx = 0;
+                        this.vy = 0;
+
+                        if (this.type === 'striker') {
+                            strikerFoul = true;
+                        } else {
+                            pocketedPiecesThisTurn.push(this);
+                        }
+                    }
+                });
+            }
+        }
+
+        let striker = new Piece(BOARD_SIZE / 2, BOARD_SIZE - BORDER - 36, 15, 'striker');
+        let pieces = [];
+
+        // Set up standard 19 Carrom pieces (1 Queen, 9 White, 9 Black)
+        function initBoard() {
+            pieces = [];
+            const cx = BOARD_SIZE / 2;
+            const cy = BOARD_SIZE / 2;
+            const r = 10.5; // Piece Radius
+
+            // 1. Center Queen
+            pieces.push(new Piece(cx, cy, r, 'queen'));
+
+            // 2. Inner Ring (6 Pieces: Alternating Black & White)
+            const innerRadius = r * 2.05;
+            for (let i = 0; i < 6; i++) {
+                let angle = (i * Math.PI) / 3;
+                let x = cx + innerRadius * Math.cos(angle);
+                let y = cy + innerRadius * Math.sin(angle);
+                let type = (i % 2 === 0) ? 'white' : 'black';
+                pieces.push(new Piece(x, y, r, type));
+            }
+
+            // 3. Outer Ring (12 Pieces: Alternating White & Black)
+            const outerRadius = r * 4.05;
+            for (let i = 0; i < 12; i++) {
+                let angle = (i * Math.PI) / 6 + (Math.PI / 12);
+                let x = cx + outerRadius * Math.cos(angle);
+                let y = cy + outerRadius * Math.sin(angle);
+                let type = (i % 2 === 0) ? 'black' : 'white';
+                pieces.push(new Piece(x, y, r, type));
+            }
+
+            resetStrikerPosition();
+        }
+
+        function resetStrikerPosition() {
+            striker.isPocketed = false;
+            striker.vx = 0;
+            striker.vy = 0;
+            striker.x = BOARD_SIZE / 2;
+            striker.y = (currentPlayer === 1) ? BOARD_SIZE - BORDER - 36 : BORDER + 36;
+        }
+
+        // Precise Elastic Physics Collisions
+        function resolveCollisions() {
+            let all = [striker, ...pieces];
+            for (let i = 0; i < all.length; i++) {
+                for (let j = i + 1; j < all.length; j++) {
+                    let p1 = all[i];
+                    let p2 = all[j];
+
+                    if (p1.isPocketed || p2.isPocketed) continue;
+
+                    let dx = p2.x - p1.x;
+                    let dy = p2.y - p1.y;
+                    let dist = Math.hypot(dx, dy);
+                    let minDist = p1.radius + p2.radius;
+
+                    if (dist < minDist) {
+                        let overlap = 0.5 * (minDist - dist);
+                        let nx = dx / (dist || 1);
+                        let ny = dy / (dist || 1);
+
+                        p1.x -= nx * overlap;
+                        p1.y -= ny * overlap;
+                        p2.x += nx * overlap;
+                        p2.y += ny * overlap;
+
+                        let kx = p1.vx - p2.vx;
+                        let ky = p1.vy - p2.vy;
+                        let p = 2 * (nx * kx + ny * ky) / (p1.mass + p2.mass);
+
+                        p1.vx -= p * p2.mass * nx * 0.88;
+                        p1.vy -= p * p2.mass * ny * 0.88;
+                        p2.vx += p * p1.mass * nx * 0.88;
+                        p2.vy += p * p1.mass * ny * 0.88;
+                    }
+                }
+            }
+        }
+
+        // Aiming & Drag Controls
+        let isDragging = false;
+        let dragPos = { x: 0, y: 0 };
+
+        function getCanvasCoords(e) {
+            let rect = canvas.getBoundingClientRect();
+            let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (clientX - rect.left) * (BOARD_SIZE / rect.width),
+                y: (clientY - rect.top) * (BOARD_SIZE / rect.height)
+            };
+        }
+
+        function handleStart(e) {
+            if (isMoving) return;
+            let pos = getCanvasCoords(e);
+            let baselineY = (currentPlayer === 1) ? BOARD_SIZE - BORDER - 36 : BORDER + 36;
+
+            // Allow positioning along the baseline
+            if (Math.abs(pos.y - baselineY) < 35) {
+                striker.x = Math.max(BORDER + 55, Math.min(BOARD_SIZE - BORDER - 55, pos.x));
+            }
+
+            let d = Math.hypot(pos.x - striker.x, pos.y - striker.y);
+            if (d < striker.radius + 25) {
+                isDragging = true;
+                dragPos = pos;
+            }
+        }
+
+        function handleMove(e) {
+            if (!isDragging) return;
+            dragPos = getCanvasCoords(e);
+        }
+
+        function handleEnd() {
+            if (!isDragging) return;
+            isDragging = false;
+
+            let dx = striker.x - dragPos.x;
+            let dy = striker.y - dragPos.y;
+            let dist = Math.hypot(dx, dy);
+
+            if (dist > 10) {
+                // Tuned realistic impulse (Slower, heavier shot)
+                const powerFactor = 0.075;
+                striker.vx = dx * powerFactor;
+                striker.vy = dy * powerFactor;
+
+                // Cap max velocity
+                let speed = Math.hypot(striker.vx, striker.vy);
+                if (speed > 14) {
+                    striker.vx = (striker.vx / speed) * 14;
+                    striker.vy = (striker.vy / speed) * 14;
+                }
+
+                isMoving = true;
+                pocketedPiecesThisTurn = [];
+                strikerFoul = false;
+            }
+        }
+
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleEnd);
+
+        canvas.addEventListener('touchstart', handleStart, {passive: false});
+        canvas.addEventListener('touchmove', handleMove, {passive: false});
+        window.addEventListener('touchend', handleEnd);
+
+        // Turn & Official Rules Logic
+        function evaluateTurnEnd() {
+            let all = [striker, ...pieces];
+            let currentlyMoving = all.some(p => Math.abs(p.vx) > 0.02 || Math.abs(p.vy) > 0.02);
+
+            if (isMoving && !currentlyMoving) {
+                isMoving = false;
+                let statusMsg = "";
+
+                // 1. Striker Foul Check
+                if (strikerFoul) {
+                    scores[currentPlayer] = Math.max(0, scores[currentPlayer] - 5);
+                    statusMsg = `Foul! Striker Pocketed (-5 pts). `;
+                }
+
+                // 2. Evaluate Pocketed Pieces
+                let scoredPoints = 0;
+                let queenPocketedThisTurn = false;
+                let regularPiecePocketed = false;
+
+                pocketedPiecesThisTurn.forEach(p => {
+                    if (p.type === 'queen') {
+                        queenPocketedThisTurn = true;
+                    } else {
+                        scoredPoints += p.points;
+                        regularPiecePocketed = true;
+                    }
+                });
+
+                // 3. Handle Queen Rules (Covering Logic)
+                if (queenAwaitingCover) {
+                    if (regularPiecePocketed) {
+                        // Queen Covered!
+                        scores[queenPocketedBy] += 25;
+                        statusMsg += `Queen Covered (+25 pts)! `;
+                        queenAwaitingCover = false;
+                        queenPocketedBy = null;
+                    } else {
+                        // Cover Failed -> Return Queen to center
+                        statusMsg += `Queen Cover Failed! Returned to board. `;
+                        let q = pieces.find(p => p.type === 'queen');
+                        if (q) {
+                            q.isPocketed = false;
+                            q.x = BOARD_SIZE / 2;
+                            q.y = BOARD_SIZE / 2;
+                            q.vx = 0; q.vy = 0;
+                        }
+                        queenAwaitingCover = false;
+                        queenPocketedBy = null;
+                    }
+                }
+
+                if (queenPocketedThisTurn) {
+                    queenAwaitingCover = true;
+                    queenPocketedBy = currentPlayer;
+                    statusMsg += `Queen Pocketed! Pocket a piece to cover. `;
+                }
+
+                // Add points
+                scores[currentPlayer] += scoredPoints;
+                document.getElementById(`p${currentPlayer}-score`).innerText = scores[currentPlayer];
+
+                // 4. Decide Turn Switch
+                let earnedExtraTurn = (regularPiecePocketed || queenPocketedThisTurn) && !strikerFoul;
+
+                if (!earnedExtraTurn) {
+                    currentPlayer = (currentPlayer === 1) ? 2 : 1;
+                    if (!statusMsg) statusMsg = `Player ${currentPlayer}'s Turn`;
+                } else {
+                    statusMsg += `Player ${currentPlayer} gets Extra Turn!`;
+                }
+
+                document.getElementById('status-box').innerText = statusMsg;
+                document.getElementById('p1-card').classList.toggle('active', currentPlayer === 1);
+                document.getElementById('p2-card').classList.toggle('active', currentPlayer === 2);
+
+                resetStrikerPosition();
+            }
+        }
+
+        // Drawing Realistic Carrom Board Design
+        function drawBoard() {
+            // Dark Wood Outer Frame
+            ctx.fillStyle = '#2d1808';
+            ctx.fillRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+
+            // Bezel Shadow
+            ctx.fillStyle = '#1e1005';
+            ctx.fillRect(BORDER - 6, BORDER - 6, BOARD_SIZE - (BORDER - 6) * 2, BOARD_SIZE - (BORDER - 6) * 2);
+
+            // Playable Surface (Wood Plywood Texture)
+            ctx.fillStyle = '#edd1a1';
+            ctx.fillRect(BORDER, BORDER, BOARD_SIZE - BORDER * 2, BOARD_SIZE - BORDER * 2);
+
+            // Corner Pockets with Metallic Rim
+            pockets.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS + 2, 0, Math.PI * 2);
+                ctx.fillStyle = '#7f8c8d';
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.fillStyle = '#111111';
+                ctx.fill();
+            });
+
+            const cx = BOARD_SIZE / 2;
+            const cy = BOARD_SIZE / 2;
+
+            // Center Decorative Circles
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 42, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#c0392b';
+            ctx.fill();
+
+            // Pocket Arrows Guidelines
+            pockets.forEach(p => {
+                ctx.strokeStyle = '#a0522d';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                let dx = p.x - cx;
+                let dy = p.y - cy;
+                let angle = Math.atan2(dy, dx);
+                ctx.moveTo(cx + 50 * Math.cos(angle), cy + 50 * Math.sin(angle));
+                ctx.lineTo(p.x - 30 * Math.cos(angle), p.y - 30 * Math.sin(angle));
+                ctx.stroke();
+            });
+
+            // Baselines (Bottom & Top)
+            drawBaseline(BOARD_SIZE - BORDER - 36);
+            drawBaseline(BORDER + 36);
+        }
+
+        function drawBaseline(y) {
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 1.5;
+            
+            // Double Lines
+            ctx.beginPath();
+            ctx.moveTo(BORDER + 55, y - 4);
+            ctx.lineTo(BOARD_SIZE - BORDER - 55, y - 4);
+            ctx.moveTo(BORDER + 55, y + 4);
+            ctx.lineTo(BOARD_SIZE - BORDER - 55, y + 4);
+            ctx.stroke();
+
+            // Red End Circles
+            [BORDER + 55, BOARD_SIZE - BORDER - 55].forEach(x => {
+                ctx.beginPath();
+                ctx.arc(x, y, 9, 0, Math.PI * 2);
+                ctx.fillStyle = '#c0392b';
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        // Animation Loop
+        function animate() {
+            ctx.clearRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+            drawBoard();
+
+            // High Precision Physics Sub-stepping
+            const subSteps = 8;
+            for (let s = 0; s < subSteps; s++) {
+                // Realistic dampening factor
+                let friction = Math.pow(0.982, 1 / subSteps);
+                pieces.forEach(p => p.stepPhysics(friction));
+                striker.stepPhysics(friction);
+                resolveCollisions();
+            }
+
+            // Draw Entities
+            pieces.forEach(p => p.draw());
+            striker.draw();
+
+            // Pull-back Aiming Line
+            if (isDragging) {
+                ctx.save();
+                ctx.strokeStyle = '#e74c3c';
+                ctx.lineWidth = 2.5;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(striker.x, striker.y);
+
+                let aimX = striker.x + (striker.x - dragPos.x);
+                let aimY = striker.y + (striker.y - dragPos.y);
+                ctx.lineTo(aimX, aimY);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            evaluateTurnEnd();
+            requestAnimationFrame(animate);
+        }
+
+        initBoard();
+        animate();
+    </script>
+</body>
+</html>
         </div>
         <div id="status-msg">Player 1's Turn</div>
         <div id="p2-box" class="player-box">
