@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carrom Board Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #2c3e50;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: #ecf0f1;
+        }
+
+        h1 {
+            margin: 10px 0;
+            font-size: 1.8rem;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 10px;
+            overflow: hidden;
+            background: #deb887;
+        }
+
+        canvas {
+            display: block;
+            background: #f5deb3;
+        }
+
+        .instructions {
+            margin-top: 15px;
+            font-size: 0.95rem;
+            background: #34495e;
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-align: center;
+            max-width: 600px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Carrom Board</h1>
+    <div id="game-container">
+        <canvas id="carromCanvas" width="600" height="600"></canvas>
+    </div>
+    <div class="instructions">
+        <strong>How to Play:</strong> Click and drag on the striker (white piece at the bottom) to aim and set power. Release to shoot! Pocket the white and black pieces while avoiding the red queen.
+    </div>
+
+    <script>
+        const canvas = document.getElementById('carromCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Board dimensions
+        const boardSize = 600;
+        const borderWidth = 40;
+        const playableSize = boardSize - (borderWidth * 2);
+        
+        // Pockets setup
+        const pocketRadius = 22;
+        const pockets = [
+            { x: borderWidth + 10, y: borderWidth + 10 },
+            { x: boardSize - borderWidth - 10, y: borderWidth + 10 },
+            { x: borderWidth + 10, y: boardSize - borderWidth - 10 },
+            { x: boardSize - borderWidth - 10, y: boardSize - borderWidth - 10 }
+        ];
+
+        // Physics constants
+        const friction = 0.985;
+
+        // Game Pieces
+        class Piece {
+            constructor(x, y, radius, color, type) {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.radius = radius;
+                this.color = color;
+                this.type = type; // 'white', 'black', 'queen', 'striker'
+                this.isPocketed = false;
+            }
+
+            draw() {
+                if (this.isPocketed) return;
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#000';
+                ctx.stroke();
+                ctx.closePath();
+
+                // Inner detail circle
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                ctx.fill();
+                ctx.closePath();
+            }
+
+            update() {
+                if (this.isPocketed) return;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.vx *= friction;
+                this.vy *= friction;
+
+                // Stop if very slow
+                if (Math.abs(this.vx) < 0.05) this.vx = 0;
+                if (Math.abs(this.vy) < 0.05) this.vy = 0;
+
+                // Wall collisions (Inside playable area)
+                const minLimit = borderWidth + this.radius;
+                const maxLimit = boardSize - borderWidth - this.radius;
+
+                if (this.x < minLimit) {
+                    this.x = minLimit;
+                    this.vx *= -1;
+                } else if (this.x > maxLimit) {
+                    this.x = maxLimit;
+                    this.vx *= -1;
+                }
+
+                if (this.y < minLimit) {
+                    this.y = minLimit;
+                    this.vy *= -1;
+                } else if (this.y > maxLimit) {
+                    this.y = maxLimit;
+                    this.vy *= -1;
+                }
+
+                // Check pocketing
+                pockets.forEach(pocket => {
+                    let dist = Math.hypot(this.x - pocket.x, this.y - pocket.y);
+                    if (dist < pocketRadius) {
+                        if (this.type === 'striker') {
+                            // Reset striker if pocketed
+                            this.resetStriker();
+                        } else {
+                            this.isPocketed = true;
+                            this.vx = 0;
+                            this.vy = 0;
+                        }
+                    }
+                });
+            }
+
+            resetStriker() {
+                this.x = boardSize / 2;
+                this.y = boardSize - borderWidth - 40;
+                this.vx = 0;
+                this.vy = 0;
+            }
+        }
+
+        // Initialize pieces
+        let striker = new Piece(boardSize / 2, boardSize - borderWidth - 40, 18, '#ffffff', 'striker');
+        let pieces = [];
+
+        function setupBoard() {
+            pieces = [];
+            let centerX = boardSize / 2;
+            let centerY = boardSize / 2;
+
+            // Queen in center
+            pieces.push(new Piece(centerX, centerY, 12, '#e74c3c', 'queen'));
+
+            // Outer circle of pieces
+            let radiusOffset = 26;
+            for (let i = 0; i < 6; i++) {
+                let angle = (i * Math.PI) / 3;
+                let x = centerX + radiusOffset * Math.cos(angle);
+                let y = centerY + radiusOffset * Math.sin(angle);
+                let color = i % 2 === 0 ? '#f1c40f' : '#333333';
+                let type = i % 2 === 0 ? 'white' : 'black';
+                pieces.push(new Piece(x, y, 12, color, type));
+            }
+        }
+
+        setupBoard();
+
+        // Collision handling between two pieces
+        function handleCollisions() {
+            let allEntities = [striker, ...pieces];
+            for (let i = 0; i < allEntities.length; i++) {
+                for (let j = i + 1; j < allEntities.length; j++) {
+                    let p1 = allEntities[i];
+                    let p2 = allEntities[j];
+
+                    if (p1.isPocketed || p2.isPocketed) continue;
+
+                    let dx = p2.x - p1.x;
+                    let dy = p2.y - p1.y;
+                    let dist = Math.hypot(dx, dy);
+                    let minDist = p1.radius + p2.radius;
+
+                    if (dist < minDist) {
+                        // Resolve overlap
+                        let overlap = minDist - dist;
+                        let angle = Math.atan2(dy, dx);
+
+                        if (p1.type !== 'striker') p1.x -= overlap * Math.cos(angle) * 0.5;
+                        if (p1.type !== 'striker') p1.y -= overlap * Math.sin(angle) * 0.5;
+                        if (p2.type !== 'striker') p2.x += overlap * Math.cos(angle) * 0.5;
+                        if (p2.type !== 'striker') p2.y += overlap * Math.sin(angle) * 0.5;
+
+                        // Elastic collision physics
+                        let normalX = dx / dist;
+                        let normalY = dy / dist;
+
+                        let px = p1.vx - p2.vx;
+                        let py = p1.vy - p2.vy;
+
+                        let impulse = 2 * (normalX * px + normalY * py) / 2;
+
+                        p1.vx -= impulse * normalX * 0.9;
+                        p1.vy -= impulse * normalY * 0.9;
+                        p2.vx += impulse * normalX * 0.9;
+                        p2.vy += impulse * normalY * 0.9;
+                    }
+                }
+            }
+        }
+
+        // Mouse controls for shooting striker
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+
+        canvas.addEventListener('mousedown', (e) => {
+            let rect = canvas.getBoundingClientRect();
+            let mouseX = e.clientX - rect.left;
+            let mouseY = e.clientY - rect.top;
+
+            // Check if clicking near striker when it's stopped
+            if (striker.vx === 0 && striker.vy === 0) {
+                let dist = Math.hypot(mouseX - striker.x, mouseY - striker.y);
+                if (dist < striker.radius + 10) {
+                    isDragging = true;
+                    dragStartX = striker.x;
+                    dragStartY = striker.y;
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            let rect = canvas.getBoundingClientRect();
+            let mouseX = e.clientX - rect.left;
+            let mouseY = e.clientY - rect.top;
+
+            // Allow repositioning striker along the baseline horizontally
+            if (mouseY > boardSize - borderWidth - 70 && mouseY < boardSize - borderWidth - 20) {
+                striker.x = Math.max(borderWidth + 60, Math.min(boardSize - borderWidth - 60, mouseX));
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (!isDragging) return;
+            let rect = canvas.getBoundingClientRect();
+            let mouseX = e.clientX - rect.left;
+            let mouseY = e.clientY - rect.top;
+
+            // Calculate velocity based on drag vector (pull back to shoot forward)
+            let dx = striker.x - mouseX;
+            let dy = striker.y - mouseY;
+
+            striker.vx = dx * 0.15;
+            striker.vy = dy * 0.15;
+
+            isDragging = false;
+        });
+
+        // Draw Carrom Board aesthetics
+        function drawBoard() {
+            // Wooden Frame
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(0, 0, boardSize, boardSize);
+
+            // Playable Surface
+            ctx.fillStyle = '#f5deb3';
+            ctx.fillRect(borderWidth, borderWidth, playableSize, playableSize);
+
+            // Pockets
+            ctx.fillStyle = '#111';
+            pockets.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, pocketRadius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.closePath();
+            });
+
+            // Center Circles
+            let centerX = boardSize / 2;
+            let centerY = boardSize / 2;
+
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 2;
+
+            // Outer center circle
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 40, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.closePath();
+
+            // Inner center dot
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#c0392b';
+            ctx.fill();
+            ctx.closePath();
+
+            // Baselines
+            ctx.strokeStyle = '#c0392b';
+            // Bottom baseline
+            ctx.beginPath();
+            ctx.moveTo(borderWidth + 50, boardSize - borderWidth - 50);
+            ctx.lineTo(boardSize - borderWidth - 50, boardSize - borderWidth - 50);
+            ctx.stroke();
+            ctx.closePath();
+        }
+
+        // Game Loop
+        function animate() {
+            ctx.clearRect(0, 0, boardSize, boardSize);
+
+            drawBoard();
+
+            // Update & Draw Pieces
+            pieces.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            striker.update();
+            striker.draw();
+
+            // Draw aiming line if dragging
+            if (isDragging) {
+                let rect = canvas.getBoundingClientRect();
+                // Simple visual indicator for pull-back line
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(striker.x, striker.y);
+                ctx.lineTo(striker.x + (striker.x - event?.clientX || striker.x), striker.y + (striker.y - event?.clientY || striker.y));
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            handleCollisions();
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
+
