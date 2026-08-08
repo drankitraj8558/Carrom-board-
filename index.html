@@ -2,109 +2,511 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Carrom Board Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>2-Player Carrom Board</title>
     <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
         body {
             margin: 0;
-            padding: 0;
-            background: #2c3e50;
-            font-family: Arial, sans-serif;
+            padding: 10px;
+            background: #1e272e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            color: #ecf0f1;
+            color: #fff;
+            overflow: hidden;
         }
 
-        h1 {
-            margin: 10px 0;
-            font-size: 1.8rem;
+        /* Scoreboard Styling */
+        #scoreboard {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            max-width: 500px;
+            background: #2c3e50;
+            padding: 12px 20px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }
 
+        .player-box {
+            text-align: center;
+            padding: 6px 12px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            min-width: 110px;
+        }
+
+        .player-box.active {
+            background: #27ae60;
+            box-shadow: 0 0 10px #2ecc71;
+            transform: scale(1.05);
+        }
+
+        .player-name {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.8;
+        }
+
+        .player-score {
+            font-size: 1.6rem;
+            font-weight: bold;
+        }
+
+        #status-msg {
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #f1c40f;
+            text-align: center;
+        }
+
+        /* Canvas Wrapper */
         #game-container {
             position: relative;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            border-radius: 10px;
+            width: 100%;
+            max-width: 500px;
+            aspect-ratio: 1 / 1;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+            border-radius: 12px;
             overflow: hidden;
-            background: #deb887;
+            background: #5c3a21;
         }
 
         canvas {
+            width: 100%;
+            height: 100%;
             display: block;
-            background: #f5deb3;
+            touch-action: none;
         }
 
-        .instructions {
-            margin-top: 15px;
-            font-size: 0.95rem;
-            background: #34495e;
-            padding: 10px 20px;
-            border-radius: 5px;
+        .controls-hint {
+            margin-top: 8px;
+            font-size: 0.8rem;
+            color: #bdc3c7;
             text-align: center;
-            max-width: 600px;
         }
     </style>
 </head>
 <body>
 
-    <h1>Carrom Board</h1>
+    <!-- Scoreboard UI -->
+    <div id="scoreboard">
+        <div id="p1-box" class="player-box active">
+            <div class="player-name">Player 1 (Bottom)</div>
+            <div id="p1-score" class="player-score">0</div>
+        </div>
+        <div id="status-msg">Player 1's Turn</div>
+        <div id="p2-box" class="player-box">
+            <div class="player-name">Player 2 (Top)</div>
+            <div id="p2-score" class="player-score">0</div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
     <div id="game-container">
         <canvas id="carromCanvas" width="600" height="600"></canvas>
     </div>
-    <div class="instructions">
-        <strong>How to Play:</strong> Click and drag on the striker (white piece at the bottom) to aim and set power. Release to shoot! Pocket the white and black pieces while avoiding the red queen.
+
+    <div class="controls-hint">
+        <strong>Drag horizontally</strong> to position striker | <strong>Pull back & release</strong> to shoot
     </div>
 
     <script>
         const canvas = document.getElementById('carromCanvas');
         const ctx = canvas.getContext('2d');
 
-        // Board dimensions
-        const boardSize = 600;
-        const borderWidth = 40;
-        const playableSize = boardSize - (borderWidth * 2);
-        
-        // Pockets setup
-        const pocketRadius = 22;
+        // Game Dimensions
+        const BOARD_SIZE = 600;
+        const BORDER = 40;
+        const PLAY_AREA_MIN = BORDER;
+        const PLAY_AREA_MAX = BOARD_SIZE - BORDER;
+        const POCKET_RADIUS = 22;
+
+        // Scores and Turn State
+        let currentPlayer = 1; // 1 or 2
+        let scores = { 1: 0, 2: 0 };
+        let pointsScoredThisTurn = 0;
+        let isMoving = false;
+
+        // Pockets
         const pockets = [
-            { x: borderWidth + 10, y: borderWidth + 10 },
-            { x: boardSize - borderWidth - 10, y: borderWidth + 10 },
-            { x: borderWidth + 10, y: boardSize - borderWidth - 10 },
-            { x: boardSize - borderWidth - 10, y: boardSize - borderWidth - 10 }
+            { x: BORDER + 12, y: BORDER + 12 },
+            { x: BOARD_SIZE - BORDER - 12, y: BORDER + 12 },
+            { x: BORDER + 12, y: BOARD_SIZE - BORDER - 12 },
+            { x: BOARD_SIZE - BORDER - 12, y: BOARD_SIZE - BORDER - 12 }
         ];
 
-        // Physics constants
-        const friction = 0.985;
-
-        // Game Pieces
+        // Physics Piece Class
         class Piece {
-            constructor(x, y, radius, color, type) {
+            constructor(x, y, radius, color, points, type) {
                 this.x = x;
                 this.y = y;
                 this.vx = 0;
                 this.vy = 0;
                 this.radius = radius;
                 this.color = color;
-                this.type = type; // 'white', 'black', 'queen', 'striker'
+                this.points = points;
+                this.type = type; // 'striker', 'queen', 'white', 'black'
                 this.isPocketed = false;
+                this.mass = radius * radius;
             }
 
             draw() {
                 if (this.isPocketed) return;
 
+                ctx.save();
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
                 ctx.fillStyle = this.color;
                 ctx.fill();
                 ctx.lineWidth = 2;
-                ctx.strokeStyle = '#000';
+                ctx.strokeStyle = '#111';
                 ctx.stroke();
-                ctx.closePath();
 
-                // Inner detail circle
+                // Decorative Center Ring
                 ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.fill();
+                ctx.restore();
+            }
+
+            stepPhysics(friction) {
+                if (this.isPocketed) return;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.vx *= friction;
+                this.vy *= friction;
+
+                if (Math.abs(this.vx) < 0.02) this.vx = 0;
+                if (Math.abs(this.vy) < 0.02) this.vy = 0;
+
+                // Wall Collisions
+                if (this.x - this.radius < PLAY_AREA_MIN) {
+                    this.x = PLAY_AREA_MIN + this.radius;
+                    this.vx *= -0.9;
+                }
+                if (this.x + this.radius > PLAY_AREA_MAX) {
+                    this.x = PLAY_AREA_MAX - this.radius;
+                    this.vx *= -0.9;
+                }
+                if (this.y - this.radius < PLAY_AREA_MIN) {
+                    this.y = PLAY_AREA_MIN + this.radius;
+                    this.vy *= -0.9;
+                }
+                if (this.y + this.radius > PLAY_AREA_MAX) {
+                    this.y = PLAY_AREA_MAX - this.radius;
+                    this.vy *= -0.9;
+                }
+
+                // Pocket Collisions
+                pockets.forEach(p => {
+                    let d = Math.hypot(this.x - p.x, this.y - p.y);
+                    if (d < POCKET_RADIUS) {
+                        this.isPocketed = true;
+                        this.vx = 0;
+                        this.vy = 0;
+
+                        if (this.type !== 'striker') {
+                            pointsScoredThisTurn += this.points;
+                        }
+                    }
+                });
+            }
+        }
+
+        let striker = new Piece(BOARD_SIZE / 2, BOARD_SIZE - BORDER - 35, 16, '#ffffff', 0, 'striker');
+        let pieces = [];
+
+        function initBoard() {
+            pieces = [];
+            const cx = BOARD_SIZE / 2;
+            const cy = BOARD_SIZE / 2;
+            const r = 13;
+
+            // Queen in center (Red - 25 pts)
+            pieces.push(new Piece(cx, cy, r, '#e74c3c', 25, 'queen'));
+
+            // Inner circle (Alternating White [10 pts] and Black [5 pts])
+            const numPieces = 6;
+            const ringRadius = 27;
+
+            for (let i = 0; i < numPieces; i++) {
+                let angle = (i * Math.PI) / 3;
+                let x = cx + ringRadius * Math.cos(angle);
+                let y = cy + ringRadius * Math.sin(angle);
+                let isWhite = i % 2 === 0;
+                pieces.push(new Piece(
+                    x, y, r, 
+                    isWhite ? '#f1c40f' : '#2c3e50', 
+                    isWhite ? 10 : 5, 
+                    isWhite ? 'white' : 'black'
+                ));
+            }
+
+            resetStrikerPosition();
+        }
+
+        function resetStrikerPosition() {
+            striker.isPocketed = false;
+            striker.vx = 0;
+            striker.vy = 0;
+            striker.x = BOARD_SIZE / 2;
+            
+            // Player 1 at bottom, Player 2 at top
+            if (currentPlayer === 1) {
+                striker.y = BOARD_SIZE - BORDER - 35;
+            } else {
+                striker.y = BORDER + 35;
+            }
+        }
+
+        // Sub-stepping Elastic Collision Resolution
+        function resolveCollisions() {
+            let all = [striker, ...pieces];
+            for (let i = 0; i < all.length; i++) {
+                for (let j = i + 1; j < all.length; j++) {
+                    let p1 = all[i];
+                    let p2 = all[j];
+
+                    if (p1.isPocketed || p2.isPocketed) continue;
+
+                    let dx = p2.x - p1.x;
+                    let dy = p2.y - p1.y;
+                    let dist = Math.hypot(dx, dy);
+                    let minDist = p1.radius + p2.radius;
+
+                    if (dist < minDist) {
+                        // Separate overlapping pieces
+                        let overlap = 0.5 * (minDist - dist);
+                        let nx = dx / (dist || 1);
+                        let ny = dy / (dist || 1);
+
+                        p1.x -= nx * overlap;
+                        p1.y -= ny * overlap;
+                        p2.x += nx * overlap;
+                        p2.y += ny * overlap;
+
+                        // Elastic momentum bounce
+                        let kx = p1.vx - p2.vx;
+                        let ky = p1.vy - p2.vy;
+                        let p = 2 * (nx * kx + ny * ky) / (p1.mass + p2.mass);
+
+                        p1.vx -= p * p2.mass * nx * 0.95;
+                        p1.vy -= p * p2.mass * ny * 0.95;
+                        p2.vx += p * p1.mass * nx * 0.95;
+                        p2.vy += p * p1.mass * ny * 0.95;
+                    }
+                }
+            }
+        }
+
+        // Mouse & Touch Controls
+        let isDragging = false;
+        let dragCurrent = { x: 0, y: 0 };
+
+        function getCanvasCoords(e) {
+            let rect = canvas.getBoundingClientRect();
+            let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (clientX - rect.left) * (BOARD_SIZE / rect.width),
+                y: (clientY - rect.top) * (BOARD_SIZE / rect.height)
+            };
+        }
+
+        function handleStart(e) {
+            if (isMoving) return;
+            let pos = getCanvasCoords(e);
+            
+            // Allow horizontal placement on baseline before shooting
+            let baselineY = currentPlayer === 1 ? BOARD_SIZE - BORDER - 35 : BORDER + 35;
+            if (Math.abs(pos.y - baselineY) < 30) {
+                striker.x = Math.max(BORDER + 50, Math.min(BOARD_SIZE - BORDER - 50, pos.x));
+            }
+
+            let dist = Math.hypot(pos.x - striker.x, pos.y - striker.y);
+            if (dist < striker.radius + 20) {
+                isDragging = true;
+                dragCurrent = pos;
+            }
+        }
+
+        function handleMove(e) {
+            if (!isDragging) return;
+            let pos = getCanvasCoords(e);
+            dragCurrent = pos;
+
+            // Adjust baseline placement if dragging close to striker
+            let dx = pos.x - striker.x;
+            let dy = pos.y - striker.y;
+            if (Math.hypot(dx, dy) < 40) {
+                striker.x = Math.max(BORDER + 50, Math.min(BOARD_SIZE - BORDER - 50, pos.x));
+            }
+        }
+
+        function handleEnd() {
+            if (!isDragging) return;
+            isDragging = false;
+
+            let dx = striker.x - dragCurrent.x;
+            let dy = striker.y - dragCurrent.y;
+            let power = Math.hypot(dx, dy);
+
+            if (power > 10) {
+                striker.vx = dx * 0.18;
+                striker.vy = dy * 0.18;
+                isMoving = true;
+                pointsScoredThisTurn = 0;
+            }
+        }
+
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleEnd);
+
+        canvas.addEventListener('touchstart', handleStart, {passive: false});
+        canvas.addEventListener('touchmove', handleMove, {passive: false});
+        window.addEventListener('touchend', handleEnd);
+
+        // Turn Management Logic
+        function checkTurnEnd() {
+            let allEntities = [striker, ...pieces];
+            let currentlyMoving = allEntities.some(p => Math.abs(p.vx) > 0.05 || Math.abs(p.vy) > 0.05);
+
+            if (isMoving && !currentlyMoving) {
+                isMoving = false;
+
+                if (pointsScoredThisTurn > 0) {
+                    scores[currentPlayer] += pointsScoredThisTurn;
+                    document.getElementById(`p${currentPlayer}-score`).innerText = scores[currentPlayer];
+                    document.getElementById('status-msg').innerText = `Player ${currentPlayer} scored +${pointsScoredThisTurn}! (Extra Turn)`;
+                } else {
+                    // Switch Player
+                    currentPlayer = currentPlayer === 1 ? 2 : 1;
+                    document.getElementById('status-msg').innerText = `Player ${currentPlayer}'s Turn`;
+                    
+                    document.getElementById('p1-box').classList.toggle('active', currentPlayer === 1);
+                    document.getElementById('p2-box').classList.toggle('active', currentPlayer === 2);
+                }
+
+                resetStrikerPosition();
+            }
+        }
+
+        // Draw Board Graphics
+        function drawBoard() {
+            // Wood Frame
+            ctx.fillStyle = '#4a2c11';
+            ctx.fillRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+
+            // Play Surface
+            ctx.fillStyle = '#f3e5ab';
+            ctx.fillRect(BORDER, BORDER, BOARD_SIZE - BORDER * 2, BOARD_SIZE - BORDER * 2);
+
+            // Pockets
+            ctx.fillStyle = '#111';
+            pockets.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Center Ring & Dot
+            const cx = BOARD_SIZE / 2;
+            const cy = BOARD_SIZE / 2;
+
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 35, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#c0392b';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Player 1 Baseline (Bottom)
+            drawBaseline(BOARD_SIZE - BORDER - 35);
+
+            // Player 2 Baseline (Top)
+            drawBaseline(BORDER + 35);
+        }
+
+        function drawBaseline(y) {
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(BORDER + 50, y);
+            ctx.lineTo(BOARD_SIZE - BORDER - 50, y);
+            ctx.stroke();
+
+            // Baseline Red Circles
+            [BORDER + 50, BOARD_SIZE - BORDER - 50].forEach(x => {
+                ctx.beginPath();
+                ctx.arc(x, y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = '#c0392b';
+                ctx.fill();
+            });
+        }
+
+        // Main Game Loop (High precision sub-steps for smooth simulation)
+        function animate() {
+            ctx.clearRect(0, 0, BOARD_SIZE, BOARD_SIZE);
+            drawBoard();
+
+            // Sub-stepping for ultra-smooth physical motion without glitches
+            const subSteps = 8;
+            for (let s = 0; s < subSteps; s++) {
+                pieces.forEach(p => p.stepPhysics(Math.pow(0.98, 1 / subSteps)));
+                striker.stepPhysics(Math.pow(0.98, 1 / subSteps));
+                resolveCollisions();
+            }
+
+            // Draw Pieces
+            pieces.forEach(p => p.draw());
+            striker.draw();
+
+            // Aiming & Force Line
+            if (isDragging) {
+                ctx.save();
+                ctx.strokeStyle = '#e74c3c';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([6, 6]);
+                ctx.beginPath();
+                ctx.moveTo(striker.x, striker.y);
+                
+                // Opposite direction aim trajectory
+                let aimX = striker.x + (striker.x - dragCurrent.x);
+                let aimY = striker.y + (striker.y - dragCurrent.y);
+                ctx.lineTo(aimX, aimY);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            checkTurnEnd();
+            requestAnimationFrame(animate);
+        }
+
+        initBoard();
+        animate();
+    </script>
+</body>
+</html>
                 ctx.arc(this.x, this.y, this.radius * 0.4, 0, Math.PI * 2);
                 ctx.fillStyle = 'rgba(255,255,255,0.3)';
                 ctx.fill();
